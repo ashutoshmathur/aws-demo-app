@@ -12,7 +12,7 @@
     "lint": "eslint --ignore-path .gitignore --fix src",
     "prettier": "prettier src --write",
     "cloudFormation:synth": "cd infra && cdk synth > AWSStack.template.yaml -- --no-confirm",
-    "aws:deploy": "npm run cloudFormation:synth && cd infra && cdk deploy -- --no-confirm",
+    "aws:deploy": "npm run cloudFormation:synth && cd infra && cdk deploy --all -- --no-confirm",
     "client:deploy": "npm run aws:deploy",
     "client:deploy:nc": "npm run client:deploy -- --no-confirm",
     "client:build:deploy": "npm run build && npm run client:deploy",
