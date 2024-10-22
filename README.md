@@ -1,3 +1,8 @@
+# Deployment URLs
+
+- Cloudfront: https://dl4kcmzvmvo2r.cloudfront.net/
+- S3 bucket manual deployment: http://aws-task-2-bucket.s3-website-us-east-1.amazonaws.com/
+
 # React-shop-cloudfront
 
 This is frontend starter project for nodejs-aws mentoring program. It uses the following technologies:
