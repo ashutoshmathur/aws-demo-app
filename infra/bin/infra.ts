@@ -2,6 +2,8 @@
 import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { DeployWebAppStack } from "../lib/deploy-web-app-stack";
+// import { DemoLambdaStack } from "../lib/demo-lambda/demo-lambda-stack";
+import { ProductServiceStack } from "../lib/lambda-functions/product-service/product-service-stack";
 
 const app = new cdk.App();
 new DeployWebAppStack(app, "DeployWebAppStack", {
@@ -16,3 +18,6 @@ new DeployWebAppStack(app, "DeployWebAppStack", {
   // env: { account: '123456789012', region: 'us-east-1' },
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
+
+// new DemoLambdaStack(app, 'DemoLambdaStack', {});
+new ProductServiceStack(app, 'ProductServiceStack', {});
