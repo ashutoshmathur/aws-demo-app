@@ -35,7 +35,6 @@
     "constructs": "^10.0.0",
     "crypto": "^1.0.1",
     "source-map-support": "^0.5.21",
-    "uuid": "^10.0.0",
-    "zod": "^3.23.8"
+    "uuid": "^10.0.0"
   }
 }

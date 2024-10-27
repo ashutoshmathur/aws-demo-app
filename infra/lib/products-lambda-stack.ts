@@ -1,7 +1,9 @@
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as cdk from "aws-cdk-lib";
 import * as path from "path";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from "constructs";
 import { PRODUCTS_TABLE_NAME, STOCK_TABLE_NAME } from "./constants";
 import { ProductsApiStack } from "./products-api-stack";
@@ -16,10 +18,26 @@ export class ProductsLambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ProductsLambdaStackProps) {
     super(scope, id, props);
 
-    const productsResource =
-      props.productsApiStack.api.root.addResource("products");
+    const productsResource = props.productsApiStack.api.root.addResource("products");
 
-    const getProductsListLambda = new lambda.Function(this, "getProductsList", {
+    const utilitiesLayer = this.createLayer('UtilitiesLayer', 'lambda/layers/utilities');
+
+    const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole') // If your Lambda needs VPC access
+      ],
+    });
+
+    // Explicitly allow Lambda to use the specific layer version if necessary
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:GetLayerVersion'],
+      resources: [utilitiesLayer.layerVersionArn],
+    }));
+
+    const getProductsListLambda = new NodejsFunction(this, "getProductsList", {
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 128,
       timeout: cdk.Duration.seconds(5),
@@ -29,8 +47,13 @@ export class ProductsLambdaStack extends cdk.Stack {
         PRODUCTS_TABLE_NAME,
         STOCK_TABLE_NAME,
       },
+      layers: [utilitiesLayer],
+      bundling: {
+        externalModules: ['zod'],
+      },
+      role: lambdaRole
     });
-    const createProductLambda = new lambda.Function(
+    const createProductLambda = new NodejsFunction(
       this,
       "createProductLambda",
       {
@@ -43,6 +66,11 @@ export class ProductsLambdaStack extends cdk.Stack {
           PRODUCTS_TABLE_NAME,
           STOCK_TABLE_NAME,
         },
+        layers: [utilitiesLayer],
+        bundling: {
+          externalModules: ['zod'],
+        },
+        role: lambdaRole
       }
     );
     props.productsDBStack.productsTable.grantReadData(getProductsListLambda);
@@ -59,7 +87,7 @@ export class ProductsLambdaStack extends cdk.Stack {
     productsResource.addMethod("POST", createProductLambdaIntegration);
 
     const oneProductResource = productsResource.addResource("{product_id}");
-    const getProductByIdLambda = new lambda.Function(this, "getProductById", {
+    const getProductByIdLambda = new NodejsFunction(this, "getProductById", {
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 128,
       timeout: cdk.Duration.seconds(5),
@@ -69,6 +97,11 @@ export class ProductsLambdaStack extends cdk.Stack {
         PRODUCTS_TABLE_NAME,
         STOCK_TABLE_NAME,
       },
+      layers: [utilitiesLayer],
+      bundling: {
+        externalModules: ['zod'],
+      },
+      role: lambdaRole
     });
     props.productsDBStack.productsTable.grantReadData(getProductByIdLambda);
     props.productsDBStack.stockTable.grantReadData(getProductByIdLambda);
@@ -76,5 +109,12 @@ export class ProductsLambdaStack extends cdk.Stack {
       getProductByIdLambda
     );
     oneProductResource.addMethod("GET", getProductByIdLambdaIntegration);
+  }
+
+  private createLayer(id: string, layerPath: string): lambda.LayerVersion {
+    return new lambda.LayerVersion(this, id, {
+      code: lambda.Code.fromAsset(path.join(__dirname, layerPath)),
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X]
+    });
   }
 }
