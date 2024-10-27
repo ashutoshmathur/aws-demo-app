@@ -6,6 +6,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:ignore-error": "tsc --noEmitOnError false",
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk",
