@@ -5,7 +5,7 @@ describe('getProductsById Lambda Function', () => {
     it('should return status code 200 and the product when the product exists', async () => {
         const event = { pathParameters: { product_id: "1" } };
         const context = {};
-        const response = await handler(event as any, context as any, () => {}) as APIGatewayProxyResult;
+        const response = await handler(event as any) as APIGatewayProxyResult;
 
         expect(response.statusCode).toBe(200);
         expect(response.body).toBeDefined();
@@ -16,7 +16,7 @@ describe('getProductsById Lambda Function', () => {
     it('should return status code 404 when the product does not exist', async () => {
         const event = { pathParameters: { product_id: "999" } };
         const context = {};
-        const response = await handler(event as any, context as any, () => {}) as APIGatewayProxyResult;
+        const response = await handler(event as any) as APIGatewayProxyResult;
 
         expect(response.statusCode).toBe(404);
         expect(response.body).toBeDefined();
