@@ -1,127 +1,34 @@
 import {
-  aws_s3,
-  RemovalPolicy,
-  aws_s3_deployment,
-  CfnOutput,
-  Stack,
-  StackProps,
-  Duration,
-  aws_s3_notifications,
+  aws_s3 as s3,
+  aws_s3_deployment as s3deploy,
+  aws_s3_notifications as s3notifs,
+  aws_apigateway as apigateway,
+  aws_lambda as lambda,
+  aws_iam as iam,
+  Stack, StackProps, CfnOutput, RemovalPolicy, Duration
 } from "aws-cdk-lib";
-import * as apigateway from "aws-cdk-lib/aws-apigateway";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
-import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from "constructs";
-import path = require("path");
+import path = require('path');
 
 export class ImportServiceStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id);
 
     const utilitiesLayer = this.createLayer('UtilitiesLayer', 'lambda/layers/utilities');
+    const lambdaRole = this.createLambdaRole();
+    const importBucket = this.createImportBucket();
+    this.deployPlaceholderFile(importBucket);
+    this.exportBucketName(importBucket);
 
-    const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole') // If your Lambda needs VPC access
-      ],
-    });
-
-    // Explicitly allow Lambda to use the specific layer version if necessary
-    lambdaRole.addToPolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['lambda:GetLayerVersion'],
-      resources: [utilitiesLayer.layerVersionArn],
-    }));
-
-    const importBucket = new aws_s3.Bucket(this, "ImportServiceBucket", {
-      autoDeleteObjects: true,
-      blockPublicAccess: aws_s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: RemovalPolicy.DESTROY,
-      cors: [
-        {
-          allowedOrigins: ["*"],
-          allowedMethods: [aws_s3.HttpMethods.PUT],
-          allowedHeaders: ["*"],
-        },
-      ],
-    });
-
-    new aws_s3_deployment.BucketDeployment(this, "UploadFolderDeployment", {
-      destinationBucket: importBucket,
-      destinationKeyPrefix: "uploaded/",
-      sources: [
-        aws_s3_deployment.Source.data(
-          ".placeholder",
-          "This is a placeholder file"
-        ),
-      ],
-    });
-
-    new CfnOutput(this, "ImportServiceBucketName", {
-      value: importBucket.bucketName,
-      description: "The name of the S3 bucket",
-      exportName: "ImportServiceBucketName",
-    });
-
-    const api = new apigateway.RestApi(this, "import-api", {
-      restApiName: "My Import API Gateway",
-      description: "This API serves the Import Lambda functions.",
-      defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: apigateway.Cors.ALL_METHODS,
-      },
-    });
-
+    const api = this.createApiGateway();
     const importResource = api.root.addResource("import");
-    const importProductsFileLambda = new NodejsFunction(
-      this,
-      "importProductsFile",
-      {
-        runtime: lambda.Runtime.NODEJS_20_X,
-        memorySize: 128,
-        timeout: Duration.seconds(5),
-        handler: "importProductsFile.handler",
-        code: lambda.Code.fromAsset(path.join(__dirname, "./lambda/import")),
-        environment: {
-          BUCKET_NAME: importBucket.bucketName,
-        },
-        layers: [utilitiesLayer],
-        bundling: {
-          externalModules: ['zod', 'csv-parser', 'aws-sdk'],
-        },
-        role: lambdaRole
-      }
-    );
-    importBucket.grantPut(importProductsFileLambda);
-    const importProductsFileLambdaIntegration =
-      new apigateway.LambdaIntegration(importProductsFileLambda);
-    importResource.addMethod("GET", importProductsFileLambdaIntegration);
+    
+    const importProductsFileLambda = this.createLambdaFunction("importProductsFile", importBucket, utilitiesLayer, lambdaRole);
+    this.attachMethodsToResource(importResource, importProductsFileLambda, "GET");
 
-    const importFileParserLambda = new NodejsFunction(
-      this,
-      "importFileParser",
-      {
-        runtime: lambda.Runtime.NODEJS_20_X,
-        memorySize: 128,
-        timeout: Duration.seconds(5),
-        handler: "importFileParser.handler",
-        code: lambda.Code.fromAsset(path.join(__dirname, "./lambda/import")),
-        layers: [utilitiesLayer],
-        bundling: {
-          externalModules: ['zod', 'csv-parser', 'aws-sdk'],
-        },
-        role: lambdaRole
-      }
-    );
-    importBucket.grantReadWrite(importFileParserLambda);
-    importBucket.addEventNotification(
-      aws_s3.EventType.OBJECT_CREATED,
-      new aws_s3_notifications.LambdaDestination(importFileParserLambda),
-      { prefix: "uploaded/" }
-    );
+    const importFileParserLambda = this.createLambdaFunction("importFileParser", importBucket, utilitiesLayer, lambdaRole);
+    this.setupNotificationForBucket(importBucket, importFileParserLambda);
   }
 
   private createLayer(id: string, layerPath: string): lambda.LayerVersion {
@@ -130,4 +37,86 @@ export class ImportServiceStack extends Stack {
       compatibleRuntimes: [lambda.Runtime.NODEJS_20_X]
     });
   }
+
+  private createLambdaRole(): iam.Role {
+    // Lambda IAM Role
+    const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
+      ],
+    });
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:GetLayerVersion'],
+      resources: ['*'],
+    }));
+    return lambdaRole;
+  }
+
+  private createImportBucket(): s3.Bucket {
+    return new s3.Bucket(this, "ImportServiceBucket", {
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: RemovalPolicy.DESTROY,
+      cors: [{
+        allowedOrigins: ["*"],
+        allowedMethods: [s3.HttpMethods.PUT],
+        allowedHeaders: ["*"],
+      }],
+    });
+  }
+
+  private deployPlaceholderFile(bucket: s3.Bucket) {
+    new s3deploy.BucketDeployment(this, "UploadFolderDeployment", {
+      destinationBucket: bucket,
+      destinationKeyPrefix: "uploaded/",
+      sources: [s3deploy.Source.data(".placeholder", "This is a placeholder file")],
+    });
+  }
+
+  private exportBucketName(bucket: s3.Bucket) {
+    new CfnOutput(this, "ImportServiceBucketName", {
+      value: bucket.bucketName,
+      description: "The name of the S3 bucket",
+      exportName: "ImportServiceBucketName",
+    });
+  }
+
+  private createApiGateway(): apigateway.RestApi {
+    return new apigateway.RestApi(this, "import-api", {
+      restApiName: "My Import API Gateway",
+      description: "This API serves the Import Lambda functions.",
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+      },
+    });
+  }
+
+  private createLambdaFunction(id: string, bucket: s3.Bucket, layer: lambda.LayerVersion, role: iam.Role): NodejsFunction {
+    const lambdaFunction = new NodejsFunction(this, id, {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      handler: `${id}.handler`,
+      code: lambda.Code.fromAsset(path.join(__dirname, "./lambda/import")),
+      environment: { BUCKET_NAME: bucket.bucketName },
+      layers: [layer],
+      bundling: { externalModules: ['zod', 'csv-parser', 'aws-sdk'] },
+      role
+    });
+    return lambdaFunction;
+  }
+
+  private attachMethodsToResource(resource: apigateway.Resource, lambdaFunction: NodejsFunction, method: string) {
+    const lambdaIntegration = new apigateway.LambdaIntegration(lambdaFunction);
+    resource.addMethod(method, lambdaIntegration);
+  }
+
+  private setupNotificationForBucket(bucket: s3.Bucket, lambdaFunction: lambda.IFunction) {
+    bucket.addEventNotification(s3.EventType.OBJECT_CREATED, new s3notifs.LambdaDestination(lambdaFunction), { prefix: "uploaded/" });
+  }
+
 }
