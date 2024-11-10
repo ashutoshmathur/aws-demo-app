@@ -1,6 +1,7 @@
 import React from "react";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
+import axios from "axios";
 
 type CSVFileImportProps = {
   url: string;
@@ -41,6 +42,27 @@ export default function CSVFileImport({ url, title }: CSVFileImportProps) {
     // });
     // console.log("Result: ", result);
     // setFile("");
+
+    console.log("uploadFile to: ", url);
+    const fileName = file?.name || "";
+    const response = await axios({
+      method: "GET",
+      url,
+      params: {
+        name: encodeURIComponent(fileName),
+      },
+    });
+    console.log("File to upload: ", fileName);
+    console.log("Uploading to: ", response.data);
+    const result = await fetch(response.data.signedUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "text/csv",
+      },
+      body: file,
+    });
+    console.log("Result: ", result);
+    setFile(undefined);
   };
   return (
     <Box>

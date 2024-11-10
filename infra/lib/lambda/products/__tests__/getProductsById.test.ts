@@ -1,9 +1,9 @@
-import { handler } from '../getProductsById';
+import { handler } from '../getProductById';
 import { APIGatewayProxyResult } from 'aws-lambda';
 
 describe('getProductsById Lambda Function', () => {
     it('should return status code 200 and the product when the product exists', async () => {
-        const event = { pathParameters: { productId: "1" } };
+        const event = { pathParameters: { product_id: "1" } };
         const context = {};
         const response = await handler(event as any, context as any, () => {}) as APIGatewayProxyResult;
 
@@ -14,7 +14,7 @@ describe('getProductsById Lambda Function', () => {
     });
 
     it('should return status code 404 when the product does not exist', async () => {
-        const event = { pathParameters: { productId: "999" } };
+        const event = { pathParameters: { product_id: "999" } };
         const context = {};
         const response = await handler(event as any, context as any, () => {}) as APIGatewayProxyResult;
 
