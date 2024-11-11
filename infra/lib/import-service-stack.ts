@@ -10,9 +10,14 @@ import {
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { Construct } from "constructs";
 import path = require('path');
+import { ProductsSQSStack } from "./products-sqs-stack";
+
+interface ImportServiceStackProps extends StackProps {
+  productsSQSStack: ProductsSQSStack;
+}
 
 export class ImportServiceStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(scope: Construct, id: string, props: ImportServiceStackProps) {
     super(scope, id);
 
     const utilitiesLayer = this.createLayer('UtilitiesLayer', 'lambda/layers/utilities');
@@ -23,11 +28,21 @@ export class ImportServiceStack extends Stack {
 
     const api = this.createApiGateway();
     const importResource = api.root.addResource("import");
+    const sqsQueueURL = props?.productsSQSStack?.productsQueue?.queueUrl || 'invalid-sqs-queue-url';
     
-    const importProductsFileLambda = this.createLambdaFunction("importProductsFile", importBucket, utilitiesLayer, lambdaRole);
+    const importProductsFileEnvVars = {
+      BUCKET_NAME: importBucket.bucketName,
+    };
+    const importProductsFileLambda = this.createLambdaFunction("importProductsFile", utilitiesLayer, lambdaRole, importProductsFileEnvVars);
     this.attachMethodsToResource(importResource, importProductsFileLambda, "GET");
+       
+    const importFileParserEnvVars = {
+      QUEUE_URL: sqsQueueURL,
+    };
+    const importFileParserLambda = this.createLambdaFunction("importFileParser", utilitiesLayer, lambdaRole, importFileParserEnvVars);
 
-    const importFileParserLambda = this.createLambdaFunction("importFileParser", importBucket, utilitiesLayer, lambdaRole);
+    this. grantSendMessagesToLambda(props.productsSQSStack, importFileParserLambda);
+
     this.setupNotificationForBucket(importBucket, importFileParserLambda);
   }
 
@@ -95,14 +110,14 @@ export class ImportServiceStack extends Stack {
     });
   }
 
-  private createLambdaFunction(id: string, bucket: s3.Bucket, layer: lambda.LayerVersion, role: iam.Role): NodejsFunction {
+  private createLambdaFunction(id: string, layer: lambda.LayerVersion, role: iam.Role, envVars: { BUCKET_NAME?: string; QUEUE_URL?: string; }): NodejsFunction {
     const lambdaFunction = new NodejsFunction(this, id, {
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 128,
       timeout: Duration.seconds(5),
       handler: `${id}.handler`,
       code: lambda.Code.fromAsset(path.join(__dirname, "./lambda/import")),
-      environment: { BUCKET_NAME: bucket.bucketName },
+      environment: envVars,
       layers: [layer],
       bundling: { externalModules: ['zod', 'csv-parser', 'aws-sdk'] },
       role
@@ -117,6 +132,10 @@ export class ImportServiceStack extends Stack {
 
   private setupNotificationForBucket(bucket: s3.Bucket, lambdaFunction: lambda.IFunction) {
     bucket.addEventNotification(s3.EventType.OBJECT_CREATED, new s3notifs.LambdaDestination(lambdaFunction), { prefix: "uploaded/" });
+  }
+
+  private grantSendMessagesToLambda(productsSQSStack: ProductsSQSStack, lambdaFunction: lambda.IFunction) {
+    productsSQSStack.productsQueue.grantSendMessages(lambdaFunction);
   }
 
 }
