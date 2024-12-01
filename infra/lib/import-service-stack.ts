@@ -5,12 +5,17 @@ import {
   aws_apigateway as apigateway,
   aws_lambda as lambda,
   aws_iam as iam,
+  aws_ssm as ssm,
+  aws_sqs as sqs,
   Stack, StackProps, CfnOutput, RemovalPolicy, Duration
 } from "aws-cdk-lib";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { Construct } from "constructs";
 import path = require('path');
 import { ProductsSQSStack } from "./products-sqs-stack";
+import * as dotenv from "dotenv";
+
+dotenv.config();
 
 interface ImportServiceStackProps extends StackProps {
   productsSQSStack: ProductsSQSStack;
@@ -20,6 +25,10 @@ export class ImportServiceStack extends Stack {
   constructor(scope: Construct, id: string, props: ImportServiceStackProps) {
     super(scope, id);
 
+    // Retrieve the SQS Queue ARN from SSM Parameter Store
+    const catalogItemsQueueArn = ssm.StringParameter.valueForStringParameter(this, '/products-sqs-stack/catalogItemsQueueArn');
+    // Import the SQS Queue using its ARN
+    const catalogItemsQueue = sqs.Queue.fromQueueArn(this, 'ImportedCatalogItemsQueue', catalogItemsQueueArn);
     const utilitiesLayer = this.createLayer('UtilitiesLayer', 'lambda/layers/utilities');
     const lambdaRole = this.createLambdaRole();
     const importBucket = this.createImportBucket();
@@ -28,13 +37,21 @@ export class ImportServiceStack extends Stack {
 
     const api = this.createApiGateway();
     const importResource = api.root.addResource("import");
-    const sqsQueueURL = props?.productsSQSStack?.productsQueue?.queueUrl || 'invalid-sqs-queue-url';
+    const sqsQueueURL = catalogItemsQueue.queueUrl || props?.productsSQSStack?.productsQueue?.queueUrl || 'invalid-sqs-queue-url';
+
+    const basicAuthorizerLambda = this.createBasicAuthorizerLambda();
+    const authorizer = this.createAPIGatewayAuthorizer(basicAuthorizerLambda);
+
+    const resourceOptions = {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM,
+    };
     
     const importProductsFileEnvVars = {
       BUCKET_NAME: importBucket.bucketName,
     };
     const importProductsFileLambda = this.createLambdaFunction("importProductsFile", utilitiesLayer, lambdaRole, importProductsFileEnvVars);
-    this.attachMethodsToResource(importResource, importProductsFileLambda, "GET");
+    this.attachMethodsToResource(importResource, importProductsFileLambda, "GET", resourceOptions);
        
     const importFileParserEnvVars = {
       QUEUE_URL: sqsQueueURL,
@@ -57,6 +74,7 @@ export class ImportServiceStack extends Stack {
     // Lambda IAM Role
     const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      roleName: 'ImportServiceLambdaExecutionRole',
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
@@ -125,9 +143,9 @@ export class ImportServiceStack extends Stack {
     return lambdaFunction;
   }
 
-  private attachMethodsToResource(resource: apigateway.Resource, lambdaFunction: NodejsFunction, method: string) {
+  private attachMethodsToResource(resource: apigateway.Resource, lambdaFunction: NodejsFunction, method: string, options: apigateway.MethodOptions = {}) {
     const lambdaIntegration = new apigateway.LambdaIntegration(lambdaFunction);
-    resource.addMethod(method, lambdaIntegration);
+    resource.addMethod(method, lambdaIntegration, options);
   }
 
   private setupNotificationForBucket(bucket: s3.Bucket, lambdaFunction: lambda.IFunction) {
@@ -136,6 +154,36 @@ export class ImportServiceStack extends Stack {
 
   private grantSendMessagesToLambda(productsSQSStack: ProductsSQSStack, lambdaFunction: lambda.IFunction) {
     productsSQSStack.productsQueue.grantSendMessages(lambdaFunction);
+  }
+
+  private createBasicAuthorizerLambda(): lambda.Function {
+    const basicAuthorizerLambda = new NodejsFunction(this, "basicAuthorizer", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 128,
+      timeout: Duration.seconds(30),
+      handler: "basicAuthorizer.handler",
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, "./lambda/authorizer")
+      ),
+      environment: {
+        USERNAME: process.env.USERNAME || "",
+        PASSWORD: process.env.PASSWORD || "",
+      },
+    });
+    return basicAuthorizerLambda;
+  }
+
+  private createAPIGatewayAuthorizer(authorizerLambda: lambda.Function): apigateway.TokenAuthorizer {
+    const authorizer = new apigateway.TokenAuthorizer(
+      this,
+      "ImportAuthorizer",
+      {
+        handler: authorizerLambda,
+        identitySource: apigateway.IdentitySource.header("Authorization"),
+        resultsCacheTtl: Duration.seconds(0),
+      }
+    );
+    return authorizer;
   }
 
 }

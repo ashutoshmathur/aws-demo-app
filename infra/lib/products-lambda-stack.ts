@@ -94,6 +94,7 @@ export class ProductsLambdaStack extends cdk.Stack {
   private createLambdaRole(): iam.Role {
     return new iam.Role(this, 'LambdaExecutionRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      roleName: 'ProductsLambdaExecutionRole',
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
